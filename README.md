@@ -6,15 +6,13 @@ A Docker application for an existing Linux Docker host managed by Portainer. It 
 
 Do not deploy deploy/portainer.compose.yaml: that older optional file installs Portainer itself. The application stack is **compose.yaml** at the repository root.
 
-### 1. Create persistent folders on the Docker host
+### 1. Choose persistent storage in Portainer
 
-Run these commands on the Linux machine whose Docker engine Portainer manages, not on your Windows computer or on a separate Portainer management server:
+Keep HOST_DATA_ROOT at `/srv/docker/docusign-downloader` unless your Docker host uses another dedicated application-data location. The stack creates config, data, downloads, and logs beneath that path during deployment. No host terminal commands are needed.
 
-```bash
-sudo mkdir -p /srv/docker/docusign-downloader/{config,data,downloads,logs}
-sudo chown -R 10001:10001 /srv/docker/docusign-downloader
-sudo chmod 700 /srv/docker/docusign-downloader/{config,data,downloads,logs}
-```
+A small initialize container sets folder ownership to PUID/PGID and permissions to 700, then exits successfully. The downloader starts only after initialization succeeds. An exited initialize container with exit code 0 is expected. If initialization fails, open its logs in Portainer. Keep PUID/PGID unchanged after first deployment: initialization does not recursively change existing databases or downloaded files. Use a dedicated path, not an existing shared folder.
+
+This stack requires a Docker Standalone environment with Compose dependency support. It is not a Docker Swarm stack.
 
 Mounts use absolute host paths outside the Git checkout. Replacing the container preserves these folders. Back up all four folders; stop the application while copying its SQLite database. Run only one application instance against this database.
 
@@ -74,7 +72,9 @@ Create/configure a DocuSign integration using JWT, generate an RSA key pair, and
 /srv/docker/docusign-downloader/config/private-key.pem
 ```
 
-Make it readable by UID 10001 only (ownership 10001:10001 and mode 600). The configuration folder is mounted read-only in the container. Access tokens are held in memory and refreshed automatically. Production access requires the integration to be approved/promoted for production; a demo integration cannot download production contracts. The account ID is checked against OAuth userinfo and the API base URI is discovered from DocuSign.
+To place the key using Portainer, open Containers > the downloader container > Console. Choose `/bin/sh`, use its default application user (10001), and connect. Enter `umask 077`, then `cat > /config/private-key.pem`, paste the PEM key including its BEGIN/END lines, and press Ctrl-D to finish. Do not paste the key into GitHub, stack YAML, or chat. The configuration mount is writable for this setup step; the image/root filesystem remains read-only. The created key is readable only by its owner. No Docker CLI or host terminal is required.
+
+Access tokens are held in memory and refreshed automatically. Production access requires the integration to be approved/promoted for production; a demo integration cannot download production contracts. The account ID is checked against OAuth userinfo and the API base URI is discovered from DocuSign.
 
 See https://developers.docusign.com/platform/auth/jwt-get-token/ for the JWT setup and consent requirements. Do not put private keys or tokens in GitHub.
 

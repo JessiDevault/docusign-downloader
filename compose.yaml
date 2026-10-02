@@ -1,8 +1,66 @@
 services:
+  initialize:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PUID: ${PUID:-10001}
+      PGID: ${PGID:-10001}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        case "$$PUID" in ''|*[!0-9]*) echo 'PUID must be numeric'; exit 1;; esac
+        case "$$PGID" in ''|*[!0-9]*) echo 'PGID must be numeric'; exit 1;; esac
+        test "$$PUID" -gt 0
+        test "$$PGID" -gt 0
+        for folder in /config /data /downloads /logs; do
+          chown "$$PUID:$$PGID" "$$folder"
+          chmod 700 "$$folder"
+        done
+        if test -f /config/private-key.pem; then
+          chown "$$PUID:$$PGID" /config/private-key.pem
+          chmod 600 /config/private-key.pem
+        fi
+        echo 'Persistent folders initialized. This container is expected to exit successfully.'
+    volumes:
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/config
+        target: /config
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/data
+        target: /data
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/downloads
+        target: /downloads
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/logs
+        target: /logs
+        bind:
+          create_host_path: true
   downloader:
     image: ghcr.io/jessidevault/docusign-downloader:${IMAGE_TAG:-main}
     restart: unless-stopped
     user: "${PUID:-10001}:${PGID:-10001}"
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
     read_only: true
     cap_drop:
       - ALL
@@ -27,7 +85,6 @@ services:
       - type: bind
         source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/config
         target: /config
-        read_only: true
         bind:
           create_host_path: false
       - type: bind

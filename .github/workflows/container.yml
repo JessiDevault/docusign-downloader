@@ -18,6 +18,24 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - name: Validate Compose
         run: APP_PASSWORD=validation-password-only docker compose config -q
+      - name: Verify initialization, interface, and persistent storage
+        env:
+          APP_PASSWORD: validation-password-only
+          HOST_DATA_ROOT: ${{ runner.temp }}/docusign-test
+        run: |
+          docker build -t ghcr.io/jessidevault/docusign-downloader:main .
+          docker compose up -d --wait --wait-timeout 120 downloader
+          curl --fail http://127.0.0.1:8088/health
+          curl --fail --user admin:validation-password-only http://127.0.0.1:8088/ | grep 'Recent jobs'
+          docker compose exec -T downloader python -c "from pathlib import Path; p=Path('/config/persistence-test'); p.write_text('survives'); assert p.stat().st_uid == 10001"
+          docker compose up -d --force-recreate --wait --wait-timeout 120 downloader
+          docker compose exec -T downloader python -c "from pathlib import Path; assert Path('/config/persistence-test').read_text() == 'survives'; assert Path('/data/downloads.sqlite3').exists()"
+      - name: Stop verification stack
+        if: always()
+        env:
+          APP_PASSWORD: validation-password-only
+          HOST_DATA_ROOT: ${{ runner.temp }}/docusign-test
+        run: docker compose down
   image:
     needs: test
     runs-on: ubuntu-latest
