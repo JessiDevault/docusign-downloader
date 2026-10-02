@@ -86,20 +86,20 @@ services:
         source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/config
         target: /config
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/data
         target: /data
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/downloads
         target: /downloads
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/logs
         target: /logs
         bind:
-          create_host_path: false
+          create_host_path: true
 
