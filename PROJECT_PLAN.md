@@ -1,36 +1,31 @@
-# DocuSign Downloader deployment project
+# Project status
 
-## Confirmed requirements
-- Download completed signed contract PDFs and exclude Certificates of Completion.
-- Support 1,000+ contracts, duplicate protection, resumable downloads, and success/failure logs.
-- Publish the application source and deployment templates in GitHub.
-- Deploy through Portainer with a disposable application container.
-- Keep configuration, database, downloads, and logs in host folders outside the container.
-- Configure Git-backed deployment updates.
-- Establish and verify a working Portainer instance.
+## Goal
+Deploy a disposable DocuSign downloader through the existing Linux Docker/Portainer environment at 10.102.0.10, backed by the private GitHub repository JessiDevault/docusign-downloader. Use persistent host folders and automatic jobs with a viewing interface.
 
-## Current evidence
-The local workspace contains Git metadata only. No application code is present. The private GitHub repository is https://github.com/JessiDevault/docusign-downloader. Docker, Git, and gh were not found on the current command path. The shared conversation ends at DocuSign API setup; authentication and downloads have not been verified.
+## Implemented
+- Dockerfile and root compose.yaml for the application.
+- GitHub Actions test/build/publish workflow for GHCR.
+- JWT OAuth authentication, account verification, and automatic token refresh.
+- Completed-envelope pagination and completion-date filtering in UTC.
+- Document selection, certificate exclusion, preview inventory, PDF downloads.
+- SQLite job/download history, checksum duplicate protection, atomic file writes.
+- Browser login, job history, manual previews/downloads, automatic recurring jobs.
+- Host bind mounts under /srv/docker/docusign-downloader.
+- Setup, credential, update, and verification instructions in README.md.
 
-## Proposed deployment design
-Build application images in GitHub Actions and publish to GitHub Container Registry. Store Compose deployment templates in the same repository. Portainer deploys the Git-backed stack and checks for changes. Image updates require an explicit image version or digest change in the stack; updating a template alone does not build an image.
+## Local validation
+Six automated tests pass: selection, UTC ranges, preview, resume/corruption recovery, invalid-PDF retry, and durable job history. Application syntax validated.
 
-Mount separate absolute host directories into /config, /data, /downloads, and /logs. Keep these directories outside the Git checkout so stack updates cannot replace persistent state. Store credentials only in the mounted configuration folder; exclude credentials, tokens, databases, and downloaded contracts from source control and image builds. Persist resumable download state in SQLite under /data. Use envelope ID plus document ID as the unique download identity.
+## Remaining verification
+- [ ] GitHub Actions tests and container image publication.
+- [ ] Private repository and registry authentication in Portainer.
+- [ ] Create host directories and set ownership.
+- [ ] Deploy root compose.yaml and open the interface.
+- [ ] Configure DocuSign integration, JWT consent, and private key on host.
+- [ ] Verify one contract, then progressive batches.
+- [ ] Enable automatic schedule and verify a job runs.
+- [ ] Recreate container and verify data/configuration survival.
+- [ ] Verify Git-backed stack/image update behavior in installed Portainer edition.
 
-## Implementation and verification checklist
-- [ ] Identify any existing application source and migration data.
-- [ ] Confirm Docker host and access method.
-- [x] Confirm GitHub owner, repository, and visibility: JessiDevault/docusign-downloader (private).
-- [ ] Clarify what templates must auto-update.
-- [ ] Establish Docker and Portainer on the selected host.
-- [ ] Implement authentication and verify one completed envelope.
-- [ ] Implement contract selection, pagination, retries, and resumable download state.
-- [ ] Add Dockerfile, Compose stack, image build workflow, and deployment instructions.
-- [ ] Publish repository and image.
-- [ ] Deploy through Portainer and verify application behavior.
-- [ ] Recreate container and verify configuration, database, and files survive.
-- [ ] Verify a Git template/image update reaches the deployed stack.
-- [ ] Validate progressive bulk runs before the full archive download.
-
-## Pending decisions
-Deployment host, template meaning, and location of existing source are awaiting user input. The user will make deployment changes in Portainer.
+The user manages changes in Portainer. Existing deploy/portainer.compose.yaml is an optional Portainer installer and is not the downloader stack.

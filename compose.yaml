@@ -1,0 +1,48 @@
+services:
+  downloader:
+    image: ghcr.io/jessidevault/docusign-downloader:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    user: "${PUID:-10001}:${PGID:-10001}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8088}:8080"
+    environment:
+      APP_USERNAME: ${APP_USERNAME:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:?Set an application password of at least 16 characters}
+      AUTO_ENABLED: ${AUTO_ENABLED:-false}
+      AUTO_INTERVAL_SECONDS: ${AUTO_INTERVAL_SECONDS:-86400}
+      AUTO_START_DATE: ${AUTO_START_DATE:-}
+      DOCUMENT_NAME_PATTERN: ${DOCUMENT_NAME_PATTERN:-}
+      DOCUSIGN_AUTH_HOST: ${DOCUSIGN_AUTH_HOST:-account-d.docusign.com}
+      DOCUSIGN_CLIENT_ID: ${DOCUSIGN_CLIENT_ID:-}
+      DOCUSIGN_USER_ID: ${DOCUSIGN_USER_ID:-}
+      DOCUSIGN_ACCOUNT_ID: ${DOCUSIGN_ACCOUNT_ID:-}
+    volumes:
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/config
+        target: /config
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/downloads
+        target: /downloads
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/logs
+        target: /logs
+        bind:
+          create_host_path: false
+
