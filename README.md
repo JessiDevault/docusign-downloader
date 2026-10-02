@@ -37,7 +37,7 @@ Choose Stacks > Add stack > Repository:
 | --- | --- |
 | Stack name | docusign-downloader |
 | Repository URL | https://github.com/JessiDevault/docusign-downloader.git |
-| Repository reference | refs/heads/main |
+| Repository reference | refs/heads/deploy |
 | Compose path | compose.yaml |
 
 Enable repository authentication. Select your GHCR registry. Add these environment variables using deploy/app.env.example as the reference:
@@ -50,7 +50,7 @@ Enable repository authentication. Select your GHCR registry. Add these environme
 | BIND_ADDRESS | Docker host private IP for LAN access, or 127.0.0.1 behind an HTTPS proxy |
 | APP_PORT | 8088 |
 | PUID / PGID | 10001 / 10001; match host folder ownership |
-| IMAGE_TAG | main initially, or a published sha tag |
+| IMAGE_TAG | Not needed for the generated deploy branch; it pins the published image digest |
 | DOCUSIGN_AUTH_HOST | account-d.docusign.com for demo; account.docusign.com for production |
 | DOCUSIGN_CLIENT_ID | Integration key |
 | DOCUSIGN_USER_ID | API user GUID |
@@ -94,7 +94,11 @@ Dates and schedule timestamps use UTC. One job runs at a time. Automatic scans h
 
 ### 8. Pull updates from GitHub
 
-Keep Compose changes in GitHub and host-specific values in Portainer environment variables. Git-backed stacks can pull/redeploy repository changes; available polling/webhook automation depends on the installed Portainer edition. When using the moving main image tag, select image re-pull during update so the new published image is retrieved. A Git check that runs before image publication can retrieve the old image: wait for Actions to succeed and then pull/redeploy, or use a published sha tag for a controlled update. Do not detach the stack from Git if you want continued Git-backed updates.
+Keep source and Compose edits on main. After tests pass and the image is published, GitHub Actions generates the deploy branch with compose.yaml referencing that published image by digest. Point Portainer at refs/heads/deploy. This prevents it from fetching a new template before its corresponding image exists.
+
+In your Git-backed stack, enable GitOps polling if your installed Portainer edition supports it (for example, a five-minute interval). Otherwise use Pull and redeploy manually in Portainer. Keep credentials, folder paths, schedule settings, and host-specific values in Portainer environment variables. The generated branch uses an exact image digest and does not use IMAGE_TAG. Do not detach the stack from Git. Changes made to generated files on deploy will be replaced by the next successful build; edit source on main.
+
+To verify automatic updates, record the current image digest in Portainer, publish a source update, wait for the deployment workflow to succeed, and confirm Portainer picks up the changed deploy commit and image digest. Then confirm job history and downloaded files remain present. This end-to-end behavior still requires verification in your Portainer instance.
 
 https://docs.portainer.io/user/docker/stacks/add
 https://docs.portainer.io/user/docker/stacks/edit
@@ -102,3 +106,5 @@ https://docs.portainer.io/user/docker/stacks/edit
 ## Current verification scope
 
 Local automated tests cover document/certificate selection, preview inventory, duplicate avoidance across runner recreation, corrupted-file recovery, invalid PDF retry, date ranges, and durable job history. Live DocuSign authentication/downloads, the Linux container, registry access, Portainer deployment, and Git update behavior must still be verified in your environment. /health does not validate DocuSign connectivity.
+
+
