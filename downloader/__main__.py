@@ -152,12 +152,12 @@ def main():
             history = '<table><thead><tr><th>Started (UTC)</th><th>Job status</th><th>Trigger</th><th>Date range</th><th>Envelope status</th><th>Sender user ID</th><th>Template IDs</th><th>Mode</th><th>Results</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
             schedule_status = 'Enabled' if auto_enabled else 'Disabled'
             self.send(200, '''<!doctype html><html><meta charset="utf-8"><title>DocuSign downloader</title>
-<style>body{font:16px system-ui;max-width:1200px;margin:40px auto;padding:20px}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd;vertical-align:top}label{display:block;margin:16px 0}input{padding:8px}button{padding:12px}pre{white-space:pre-wrap;background:#eee;padding:20px}</style>
+<style>body{font:16px system-ui;max-width:1200px;margin:40px auto;padding:20px}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd;vertical-align:top}label{display:block;margin:16px 0}input,select{padding:8px}button{padding:12px}pre{white-space:pre-wrap;background:#eee;padding:20px}</style>
 <h1>DocuSign contract downloader</h1><p>Start with Preview and an envelope limit of 1. Only completed envelopes are selected. Dates are completion dates in UTC. Certificates are excluded. Without a name filter, only single-document envelopes are selected.</p>
 <form method="post" action="/run"><input type="hidden" name="csrf" value="''' + csrf + '''">
 <p>Envelope status: <strong>Completed only</strong></p>
-<label>Envelope sender (optional) <input id="sender" name="sender" list="sender-options" autocomplete="off" maxlength="500" placeholder="Type a name or email"></label>
-<datalist id="sender-options"></datalist><p id="sender-message" role="status">Choose a populated name; blank includes all accessible senders.</p>
+<label>Envelope sender (optional) <select id="sender-options" name="sender"><option value="">All accessible senders</option></select></label>
+<p id="sender-message" role="status">Loading account users�</p><button type="button" id="reload-users">Reload users</button>
 <script src="/static/users.js" defer></script>
 <label>Template IDs (comma-separated; blank includes all envelopes) <input name="template_ids" maxlength="1900" value="''' + html.escape(auto_templates, quote=True) + '''"></label>
 <p>Copy template IDs from DocuSign. An envelope must be completed, match the selected sender, and match at least one selected template. Envelopes without templates are excluded when a template filter is set. The limit counts envelopes scanned before template matching.</p>

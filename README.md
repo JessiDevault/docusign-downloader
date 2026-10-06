@@ -103,4 +103,4 @@ Local automated tests cover document/certificate selection, preview inventory, d
 
 
 ## Completed envelopes and sender selection
-Only completed envelopes are eligible. In the interface, focus Envelope sender, type a name or email, and choose a populated entry. Blank means all accessible senders. Optional template filters apply together with the sender. Automatic jobs use SENDER_USER_ID for a sender GUID and TEMPLATE_IDS for templates; ENVELOPE_STATUSES is obsolete and ignored. See deploy/SELECTION_RULES.md.
+Only completed envelopes are eligible. In the interface, choose a DocuSign sender from the Envelope sender dropdown. All accessible senders includes every sender you can access. Optional template filters apply together with the sender. Automatic jobs use SENDER_USER_ID for a sender GUID and TEMPLATE_IDS for templates; ENVELOPE_STATUSES is obsolete and ignored. See deploy/SELECTION_RULES.md.

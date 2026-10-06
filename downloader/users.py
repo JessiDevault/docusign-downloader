@@ -21,10 +21,10 @@ class UserDirectory:
                 self.expires = time.monotonic() + 300
             return list(self.users)
 
-    def resolve(self, label):
-        if not label.strip():
+    def resolve(self, user_id):
+        if not user_id.strip():
             return ''
-        match = next((u for u in self.all() if u['label'] == label), None)
+        match = next((u for u in self.all() if u['id'] == user_id), None)
         if not match:
-            raise ValueError('Choose a sender from the populated list, or clear the sender field.')
+            raise ValueError('Choose a valid sender from the dropdown, or choose All accessible senders.')
         return match['id']

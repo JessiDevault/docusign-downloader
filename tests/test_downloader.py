@@ -142,7 +142,7 @@ class DirectoryTests(unittest.TestCase):
         client.users.return_value = [{'id': 'a', 'name': 'Sam', 'email': 'sam@a.com'}, {'id': 'b', 'name': 'Sam', 'email': 'sam@b.com'}]
         directory = UserDirectory(lambda: client)
         users = directory.all()
-        self.assertEqual(directory.resolve(users[1]['label']), 'b')
+        self.assertEqual(directory.resolve(users[1]['id']), 'b')
         self.assertEqual(directory.resolve(''), '')
         with self.assertRaises(ValueError):
             directory.resolve('Sam')
