@@ -88,20 +88,14 @@ Preview never downloads PDFs. Downloads use temporary files, validate PDF header
 
 ### 7. Enable automatic jobs
 
-Set AUTO_START_DATE and DOCUMENT_NAME_PATTERN, then set AUTO_ENABLED=true and redeploy the stack. The first automatic job starts immediately; later jobs run at AUTO_INTERVAL_SECONDS. Job history and schedule due time persist in SQLite across restarts. Successful complete scans advance the completion-date window with a one-day overlap. Failed or ambiguous scans keep the earlier window for retry. Interrupted jobs are marked interrupted on restart and downloads resume on the next run. Changing the historical start date after a successful backfill does not rewind the stored window; use a manual range for earlier backfills.
+Set AUTO_START_DATE and DOCUMENT_NAME_PATTERN, then set AUTO_ENABLED=true and redeploy the stack. The first automatic job starts immediately; later jobs run at AUTO_INTERVAL_SECONDS. Job history and schedule due time persist in SQLite across restarts. Successful complete scans advance the completion-date window with a one-day overlap. Failed or ambiguous scans keep the earlier window for retry. Interrupted jobs are marked interrupted on restart and downloads resume on the next run. Changing the automatic start date, template filter or sender filter creates a fresh scan cursor.
 
 Dates and schedule timestamps use UTC. One job runs at a time. Automatic scans have a 100000-envelope ceiling; larger archives need a separate pagination/backfill strategy. Rerun the same range to recover failed documents. Inventory CSVs and logs accumulate and should be retained/rotated according to your storage policy.
 
-### 8. Pull updates from GitHub
-
-Keep source and Compose edits on main. After tests pass and the image is published, GitHub Actions generates the deploy branch with compose.yaml referencing that published image by digest. Point Portainer at refs/heads/deploy. This prevents it from fetching a new template before its corresponding image exists.
-
-In your Git-backed stack, enable GitOps polling if your installed Portainer edition supports it (for example, a five-minute interval). Otherwise use Pull and redeploy manually in Portainer. Keep credentials, folder paths, schedule settings, and host-specific values in Portainer environment variables. The generated branch uses an exact image digest and does not use IMAGE_TAG. Do not detach the stack from Git. Changes made to generated files on deploy will be replaced by the next successful build; edit source on main.
-
-To verify automatic updates, record the current image digest in Portainer, publish a source update, wait for the deployment workflow to succeed, and confirm Portainer picks up the changed deploy commit and image digest. Then confirm job history and downloaded files remain present. This end-to-end behavior still requires verification in your Portainer instance.
-
-https://docs.portainer.io/user/docker/stacks/add
-https://docs.portainer.io/user/docker/stacks/edit
+### 8. Pull updates through Portainer
+After tests and image publication succeed, GitHub Actions generates the deploy branch with an exact published image digest. For your Web editor stack, copy deploy/portainer-smb-stack.yml from GitHub into Portainer, preserve environment variables, and update the stack. Docker pulls the public image referenced by the YAML.
+Set SMB_SERVER and SMB_SHARE to the server and share name. Preserve APP_PORT, BIND_ADDRESS, DocuSign credentials, APP_PASSWORD and SMB credentials. Source repository authentication is unnecessary for this workflow. Keep AUTO_ENABLED=false during testing.
+Generated deployment files are replaced after each successful build. Edit source files on main.
 
 ## Current verification scope
 
