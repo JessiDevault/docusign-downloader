@@ -55,7 +55,7 @@ services:
         bind:
           create_host_path: true
   downloader:
-    image: ghcr.io/jessidevault/docusign-downloader@sha256:8d3619a72538eabcd652dd4bb281311d8bcd65bde6a2e5974f5a46084a3467f7
+    image: ghcr.io/jessidevault/docusign-downloader@sha256:210e62c27f32e2f61b5af47a54323e936a523357d73162d60550e8a381bc056d
     restart: unless-stopped
     user: "${PUID:-10001}:${PGID:-10001}"
     depends_on:

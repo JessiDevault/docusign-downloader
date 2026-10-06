@@ -1,6 +1,6 @@
 # Generated deployment
 
-Source: 67c2bcf26348fa2f843b1239626995c46e1b1b23
-Image: sha256:8d3619a72538eabcd652dd4bb281311d8bcd65bde6a2e5974f5a46084a3467f7
+Source: 9654a42454ea78d7ff15dde1d6743a6155ec8f5b
+Image: sha256:210e62c27f32e2f61b5af47a54323e936a523357d73162d60550e8a381bc056d
 
 Use refs/heads/deploy and compose.yaml in Portainer. Keep host configuration in Portainer environment variables. This branch is regenerated only after successful image publication. Edit source on main.
