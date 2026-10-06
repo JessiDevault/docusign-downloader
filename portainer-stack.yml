@@ -1,3 +1,5 @@
+# Portainer Web editor deployment; uses the previously published image digest.
+# Import portainer.env.example after setting APP_PASSWORD.
 services:
   initialize:
     image: alpine:3.22
@@ -55,7 +57,7 @@ services:
         bind:
           create_host_path: true
   downloader:
-    image: ghcr.io/jessidevault/docusign-downloader:${IMAGE_TAG:-main}
+    image: ghcr.io/jessidevault/docusign-downloader@sha256:c4db38a70360c199d1027f919a4f5c030647e6bf840aacca325022221077d2cf
     restart: unless-stopped
     user: "${PUID:-10001}:${PGID:-10001}"
     depends_on:
@@ -104,6 +106,7 @@ services:
         target: /logs
         bind:
           create_host_path: true
+
 
 
 

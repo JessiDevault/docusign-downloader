@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from downloader.core import Runner, Settings, select_documents, date_range
+from downloader.core import Runner, Settings, Client, select_documents, date_range, selection_filters
 
 PDF = b'%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n'
 
@@ -11,8 +11,10 @@ class FakeClient:
     def __init__(self, broken=False):
         self.calls = 0
         self.broken = broken
-    def envelopes(self, start, end):
-        yield {'envelopeId': 'test-envelope', 'emailSubject': 'Building contract', 'completedDateTime': '2026-01-01T12:00:00Z'}
+    def envelopes(self, start, end, statuses='completed'):
+        yield {'envelopeId': 'test-envelope', 'emailSubject': 'Building contract', 'status': 'completed', 'completedDateTime': '2026-01-01T12:00:00Z'}
+    def templates(self, eid):
+        return [{'templateId': '11111111-1111-1111-1111-111111111111', 'name': 'Contract'}]
     def documents(self, eid):
         return [{'documentId': '1', 'name': 'Contract.pdf', 'type': 'content'}, {'documentId': 'certificate', 'name': 'Certificate of Completion', 'type': 'summary'}]
     def download(self, eid, did, path):
@@ -56,6 +58,55 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(date_range('2026-01-01','2026-01-01'), ('2026-01-01T00:00:00Z','2026-01-02T00:00:00Z'))
         with self.assertRaises(ValueError):
             date_range('2026-01-02','2026-01-01')
+
+    def test_template_match_and_exclusion(self):
+        runner = Runner(self.settings, FakeClient())
+        match = runner.run('2026-01-01', '2026-01-02', template_ids='11111111-1111-1111-1111-111111111111')
+        self.assertEqual(match['counts']['selected'], 1)
+        excluded = runner.run('2026-01-01', '2026-01-02', download=True, template_ids='22222222-2222-2222-2222-222222222222')
+        self.assertEqual(excluded['counts']['template_excluded'], 1)
+        self.assertEqual(excluded['counts']['downloaded'], 0)
+        self.assertEqual(excluded['counts']['ambiguous'], 0)
+
+    def test_status_mismatch_is_not_downloaded(self):
+        result = Runner(self.settings, FakeClient()).run('2026-01-01', '2026-01-02', statuses='sent', download=True)
+        self.assertEqual(result['counts']['downloaded'], 0)
+
+    def test_in_progress_snapshot_does_not_suppress_completed_download(self):
+        client = FakeClient()
+        sent = {'envelopeId': 'test-envelope', 'emailSubject': 'Building contract', 'status': 'sent', 'statusChangedDateTime': '2026-01-01T12:00:00Z'}
+        with patch.object(client, 'envelopes', return_value=iter([sent])):
+            result = Runner(self.settings, client).run('2026-01-01','2026-01-02', statuses='sent', download=True)
+            self.assertEqual(result['counts']['downloaded'], 1)
+        with patch.object(client, 'envelopes', return_value=iter([sent])):
+            result = Runner(self.settings, client).run('2026-01-01','2026-01-02', statuses='sent', download=True)
+            self.assertEqual(result['counts']['skipped'], 1)
+        result = Runner(self.settings, client).run('2026-01-01','2026-01-02', download=True)
+        self.assertEqual(result['counts']['downloaded'], 1)
+        self.assertEqual(len(list(self.settings.downloads.glob('*.pdf'))), 2)
+
+    def test_invalid_filters(self):
+        for statuses, templates in [('', ''), ('unknown', ''), ('completed', 'not-a-template-id')]:
+            with self.assertRaises(ValueError):
+                selection_filters(statuses, templates)
+        self.assertEqual(selection_filters('Completed, sent,completed')[0], ('completed', 'sent'))
+
+    def test_api_filters_pagination_and_date_boundaries(self):
+        from unittest.mock import MagicMock
+        client = Client.__new__(Client)
+        first = MagicMock()
+        first.__enter__.return_value.json.return_value = {'envelopes': [
+            {'envelopeId':'a','status':'sent','statusChangedDateTime':'2026-01-01T12:00:00Z'},
+            {'envelopeId':'outside','status':'sent','statusChangedDateTime':'2026-01-02T00:00:00Z'}], 'totalSetSize':'3'}
+        second = MagicMock()
+        second.__enter__.return_value.json.return_value = {'envelopes': [
+            {'envelopeId':'b','status':'delivered','statusChangedDateTime':'2026-01-01T23:59:59Z'}], 'totalSetSize':'3'}
+        with patch.object(client, 'get', side_effect=[first, second]) as get:
+            result = list(client.envelopes('2026-01-01','2026-01-01','sent,delivered'))
+        self.assertEqual([e['envelopeId'] for e in result], ['a','b'])
+        self.assertEqual(get.call_args_list[0].args[1]['status'], 'sent,delivered')
+        self.assertEqual(get.call_args_list[0].args[1]['from_to_status'], 'changed')
+        self.assertEqual(get.call_args_list[1].args[1]['start_position'], '2')
 
 if __name__ == '__main__':
     unittest.main()

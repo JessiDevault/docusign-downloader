@@ -1,3 +1,5 @@
+# Portainer Web editor deployment; uses the previously published image digest.
+# Import portainer.env.example after setting APP_PASSWORD.
 services:
   initialize:
     image: alpine:3.22
@@ -24,7 +26,7 @@ services:
         case "$$PGID" in ''|*[!0-9]*) echo 'PGID must be numeric'; exit 1;; esac
         test "$$PUID" -gt 0
         test "$$PGID" -gt 0
-        for folder in /config /data /downloads /logs; do
+        for folder in /config /data /logs; do
           chown "$$PUID:$$PGID" "$$folder"
           chmod 700 "$$folder"
         done
@@ -45,17 +47,12 @@ services:
         bind:
           create_host_path: true
       - type: bind
-        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/downloads
-        target: /downloads
-        bind:
-          create_host_path: true
-      - type: bind
         source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/logs
         target: /logs
         bind:
           create_host_path: true
   downloader:
-    image: ghcr.io/jessidevault/docusign-downloader:${IMAGE_TAG:-main}
+    image: ghcr.io/jessidevault/docusign-downloader@sha256:c4db38a70360c199d1027f919a4f5c030647e6bf840aacca325022221077d2cf
     restart: unless-stopped
     user: "${PUID:-10001}:${PGID:-10001}"
     depends_on:
@@ -94,11 +91,11 @@ services:
         target: /data
         bind:
           create_host_path: true
-      - type: bind
-        source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/downloads
+      - type: volume
+        source: smb_downloads
         target: /downloads
-        bind:
-          create_host_path: true
+        volume:
+          nocopy: true
       - type: bind
         source: ${HOST_DATA_ROOT:-/srv/docker/docusign-downloader}/logs
         target: /logs
@@ -106,4 +103,12 @@ services:
           create_host_path: true
 
 
+
+volumes:
+  smb_downloads:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "//10.1.10.4/docusign"
+      o: "username=${SMB_USERNAME:?Set SMB_USERNAME},password=${SMB_PASSWORD:?Set SMB_PASSWORD},domain=${SMB_DOMAIN:-WORKGROUP},vers=3.0,rw,uid=${PUID:-10001},gid=${PGID:-10001},forceuid,forcegid,file_mode=0600,dir_mode=0700"
 

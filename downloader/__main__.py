@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from .jobs import Jobs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
-from .core import Runner, Settings
+from .core import Runner, Settings, ENVELOPE_STATUSES, selection_filters
 
 
 def main():
@@ -27,18 +27,24 @@ def main():
     auto_interval = max(300, int(os.getenv('AUTO_INTERVAL_SECONDS', '86400')))
     auto_start = os.getenv('AUTO_START_DATE', '')
     auto_pattern = os.getenv('DOCUMENT_NAME_PATTERN', '')
+    auto_statuses, auto_templates = selection_filters(os.getenv('ENVELOPE_STATUSES', 'completed'), os.getenv('TEMPLATE_IDS', ''))
+    auto_statuses, auto_templates = ','.join(auto_statuses), ','.join(auto_templates)
+    # Filter changes must not inherit a cursor that skips earlier matching envelopes.
+    import hashlib
+    cursor_key = 'next_start_' + hashlib.sha256(json.dumps([auto_start, auto_pattern, auto_statuses, auto_templates]).encode()).hexdigest()[:20]
     if auto_enabled:
         from .core import date_range
         date_range(auto_start, datetime.now(timezone.utc).date().isoformat())
         re.compile(auto_pattern)
 
-    def launch(start, end, pattern, limit, download, source):
+    def launch(start, end, pattern, limit, download, source, statuses='completed', template_ids=''):
         with lock:
             if state['running']:
                 return False
             state.update(running=True, result='Starting')
         try:
-            job_id = jobs.start(source, dict(start=start, end=end, pattern=pattern, limit=limit, download=download))
+            job_id = jobs.start(source, dict(start=start, end=end, pattern=pattern, limit=limit, download=download,
+                                            statuses=statuses, template_ids=template_ids))
         except Exception:
             with lock:
                 state['running'] = False
@@ -50,12 +56,12 @@ def main():
                     state['result'] = counts
             status = 'failed'
             try:
-                result = runner.run(start, end, pattern, limit, download, progress)
+                result = runner.run(start, end, pattern, limit, download, progress, statuses, template_ids)
                 counts = result['counts']
                 status = 'completed' if counts['failed'] == 0 and counts['ambiguous'] == 0 else 'needs_attention'
                 # Retain a one-day overlap, and never advance past an incomplete batch.
                 if source == 'automatic' and status == 'completed' and counts['envelopes'] < limit:
-                    jobs.set('next_start', max(auto_start, (date.fromisoformat(end) - timedelta(days=1)).isoformat()))
+                    jobs.set(cursor_key, max(auto_start, (date.fromisoformat(end) - timedelta(days=1)).isoformat()))
             except Exception as error:
                 result = str(error) if isinstance(error, RuntimeError) else type(error).__name__
             finally:
@@ -71,8 +77,8 @@ def main():
         while True:
             next_due = float(jobs.get('next_due', '0'))
             if time.time() >= next_due:
-                start = jobs.get('next_start', auto_start)
-                if launch(start, datetime.now(timezone.utc).date().isoformat(), auto_pattern, 100000, True, 'automatic'):
+                start = jobs.get(cursor_key, auto_start)
+                if launch(start, datetime.now(timezone.utc).date().isoformat(), auto_pattern, 100000, True, 'automatic', auto_statuses, auto_templates):
                     jobs.set('next_due', str(time.time() + auto_interval))
             time.sleep(10)
 
@@ -123,16 +129,21 @@ def main():
                     summary = str(counts)
                 cells = [job['started'], job['status'], job['source'],
                          parameters.get('start', '') + ' to ' + parameters.get('end', ''),
+                         parameters.get('statuses', 'completed'), parameters.get('template_ids', '') or 'All templates',
                          'Download' if parameters.get('download') else 'Preview', summary]
                 rows.append('<tr>' + ''.join('<td>' + html.escape(str(cell)) + '</td>' for cell in cells) + '</tr>')
-            history = '<table><thead><tr><th>Started (UTC)</th><th>Status</th><th>Trigger</th><th>Date range</th><th>Mode</th><th>Results</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
+            history = '<table><thead><tr><th>Started (UTC)</th><th>Job status</th><th>Trigger</th><th>Date range</th><th>Envelope statuses</th><th>Template IDs</th><th>Mode</th><th>Results</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
+            status_controls = ''.join('<label><input type="checkbox" name="statuses" value="' + item + '"' + (' checked' if item in auto_statuses.split(',') else '') + '> ' + item.title() + '</label>' for item in ENVELOPE_STATUSES)
             schedule_status = 'Enabled' if auto_enabled else 'Disabled'
             self.send(200, '''<!doctype html><html><meta charset="utf-8"><title>DocuSign downloader</title>
 <style>body{font:16px system-ui;max-width:1200px;margin:40px auto;padding:20px}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd;vertical-align:top}label{display:block;margin:16px 0}input{padding:8px}button{padding:12px}pre{white-space:pre-wrap;background:#eee;padding:20px}</style>
-<h1>DocuSign contract downloader</h1><p>Start with Preview and an envelope limit of 1. Dates use completion dates in UTC. Certificates are excluded. Without a name filter, only single-document envelopes are selected.</p>
+<h1>DocuSign contract downloader</h1><p>Start with Preview and an envelope limit of 1. With Completed alone, dates are completion dates in UTC. With other statuses selected, dates are the latest status change in UTC. Certificates are excluded. Without a name filter, only single-document envelopes are selected.</p>
 <form method="post" action="/run"><input type="hidden" name="csrf" value="''' + csrf + '''">
-<label>First completion date <input required type="date" name="start"></label>
-<label>Last completion date <input required type="date" name="end"></label>
+<fieldset><legend>Current envelope statuses</legend>''' + status_controls + '''</fieldset>
+<label>Template IDs (comma-separated; blank includes all envelopes) <input name="template_ids" maxlength="1900" value="''' + html.escape(auto_templates, quote=True) + '''"></label>
+<p>Copy template IDs from DocuSign. An envelope must match a selected status and at least one selected template. Envelopes without templates are excluded when a template filter is set. The limit counts envelopes scanned before template matching. Non-completed downloads are snapshots, not final signed documents.</p>
+<label>First date <input required type="date" name="start"></label>
+<label>Last date <input required type="date" name="end"></label>
 <label>Envelope limit <input required type="number" name="limit" min="1" max="100000" value="1"></label>
 <label>Contract filename filter (optional regular expression) <input name="pattern" maxlength="200" placeholder="Sales Contract"></label>
 <label><input required type="radio" name="mode" value="preview" checked> Preview selection</label>
@@ -163,6 +174,7 @@ def main():
                 if not 1 <= limit <= 100000 or len(pattern) > 200:
                     raise ValueError('Invalid limit or filter length')
                 re.compile(pattern)
+                statuses, templates = selection_filters(','.join(fields.get('statuses', [])), value('template_ids'))
                 if value('mode') not in ('preview', 'download'):
                     raise ValueError('Invalid mode')
                 download = value('mode') == 'download'
@@ -171,7 +183,7 @@ def main():
             except (ValueError, UnicodeError, re.error) as error:
                 self.send(400, html.escape(str(error)))
                 return
-            if not launch(start, end, pattern, limit, download, 'manual'):
+            if not launch(start, end, pattern, limit, download, 'manual', ','.join(statuses), ','.join(templates)):
                 self.send(409, 'A job is already running')
                 return
             self.send_response(303)

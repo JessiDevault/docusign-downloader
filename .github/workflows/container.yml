@@ -90,6 +90,10 @@ jobs:
             const imageLine = 'image: ghcr.io/jessidevault/docusign-downloader:${IMAGE_TAG:-main}';
             if (!source.includes(imageLine)) throw new Error('Application image reference not found');
             const compose = source.replace(imageLine, 'image: ghcr.io/jessidevault/docusign-downloader@' + digest);
+            const smbSource = fs.readFileSync('portainer-smb-stack.yml', 'utf8');
+            const smbImage = /image: ghcr\.io\/jessidevault\/docusign-downloader@sha256:[a-f0-9]{64}/;
+            if (!smbImage.test(smbSource)) throw new Error('SMB application image reference not found');
+            const smbCompose = smbSource.replace(smbImage, 'image: ghcr.io/jessidevault/docusign-downloader@' + digest);
             let parent = context.sha;
             let exists = true;
             try {
@@ -100,6 +104,9 @@ jobs:
             }
             const tree = await github.rest.git.createTree({owner, repo, tree: [
               {path: 'compose.yaml', mode: '100644', type: 'blob', content: compose},
+              {path: 'portainer-smb-stack.yml', mode: '100644', type: 'blob', content: smbCompose},
+              {path: 'portainer.env.example', mode: '100644', type: 'blob', content: fs.readFileSync('portainer.env.example', 'utf8')},
+              {path: 'portainer-smb.env.example', mode: '100644', type: 'blob', content: fs.readFileSync('portainer-smb.env.example', 'utf8')},
               {path: 'README.md', mode: '100644', type: 'blob', content:
                 '# Generated deployment\n\nSource: ' + context.sha + '\nImage: ' + digest +
                 '\n\nUse refs/heads/deploy and compose.yaml in Portainer. Keep host configuration in Portainer environment variables. This branch is regenerated only after successful image publication. Edit source on main.\n'}
@@ -111,4 +118,3 @@ jobs:
             } else {
               await github.rest.git.createRef({owner, repo, ref: 'refs/heads/deploy', sha: commit.data.sha});
             }
-

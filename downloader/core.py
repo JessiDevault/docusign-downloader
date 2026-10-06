@@ -9,6 +9,20 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlparse
+from uuid import UUID
+
+
+ENVELOPE_STATUSES = ('completed', 'sent', 'delivered', 'signed', 'created', 'declined', 'voided', 'deleted', 'timedout', 'processing')
+
+
+def selection_filters(statuses='completed', template_ids=''):
+    statuses = tuple(dict.fromkeys(x.strip().lower() for x in statuses.split(',') if x.strip()))
+    if not statuses or any(x not in ENVELOPE_STATUSES for x in statuses):
+        raise ValueError('Select at least one valid envelope status')
+    templates = tuple(dict.fromkeys(str(UUID(x.strip())) for x in template_ids.split(',') if x.strip()))
+    if len(templates) > 50:
+        raise ValueError('Select at most 50 templates')
+    return statuses, templates
 
 
 class Settings:
@@ -141,13 +155,15 @@ class Client:
             return response
         raise RuntimeError('DocuSign authentication retry limit reached')
 
-    def envelopes(self, start, end):
+    def envelopes(self, start, end, statuses='completed'):
+        selected_statuses, _ = selection_filters(statuses)
         lower, upper = date_range(start, end)
         offset = 0
         seen = set()
         while True:
             with self.get('/envelopes', {'from_date': lower, 'to_date': upper,
-                                        'status': 'completed', 'from_to_status': 'completed',
+                                        'status': ','.join(selected_statuses),
+                                        'from_to_status': 'completed' if selected_statuses == ('completed',) else 'changed',
                                         'count': '100', 'start_position': str(offset)}) as response:
                 page = response.json()
             envelopes = page.get('envelopes', [])
@@ -155,9 +171,9 @@ class Client:
                 break
             for envelope in envelopes:
                 eid = envelope['envelopeId']
-                completed = envelope.get('completedDateTime', '')
-                if eid not in seen and envelope.get('status') == 'completed' and completed:
-                    stamp = datetime.fromisoformat(completed.replace('Z', '+00:00'))
+                changed = envelope.get('completedDateTime', '') if selected_statuses == ('completed',) else envelope.get('statusChangedDateTime', '')
+                if eid not in seen and envelope.get('status', '').lower() in selected_statuses and changed:
+                    stamp = datetime.fromisoformat(changed.replace('Z', '+00:00'))
                     if date.fromisoformat(start) <= stamp.astimezone(timezone.utc).date() <= date.fromisoformat(end):
                         seen.add(eid)
                         yield envelope
@@ -167,6 +183,10 @@ class Client:
                 break
             if not page.get('nextUri') and total is None:
                 break
+
+    def templates(self, eid):
+        with self.get('/envelopes/' + quote(eid, safe='') + '/templates') as response:
+            return response.json().get('templates', [])
 
     def documents(self, eid):
         with self.get('/envelopes/' + quote(eid, safe='') + '/documents') as response:
@@ -214,21 +234,25 @@ class Runner:
         finally:
             db.close()
 
-    def run(self, start, end, pattern='', limit=1, download=False, report=lambda message: None):
+    def run(self, start, end, pattern='', limit=1, download=False, report=lambda message: None,
+            statuses='completed', template_ids=''):
+        selected_statuses, selected_templates = selection_filters(statuses, template_ids)
         date_range(start, end)
         if limit < 1 or limit > 100000:
             raise ValueError('Envelope limit must be between 1 and 100000')
         if len(pattern) > 200:
             raise ValueError('Document pattern is too long')
         re.compile(pattern)
-        counts = {'envelopes': 0, 'selected': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0, 'ambiguous': 0}
+        counts = {'envelopes': 0, 'selected': 0, 'downloaded': 0, 'skipped': 0, 'failed': 0, 'ambiguous': 0,
+                  'template_excluded': 0}
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         inventory_path = self.s.data / ('inventory-' + stamp + '.csv')
         with inventory_path.open('w', newline='', encoding='utf-8') as inventory, (self.s.logs / 'downloads.csv').open('a', newline='', encoding='utf-8') as log:
             rows = csv.writer(inventory)
-            rows.writerow(['envelope_id', 'completed_utc', 'subject', 'document_id', 'document_name', 'selection'])
+            rows.writerow(['envelope_id', 'completed_utc', 'subject', 'document_id', 'document_name', 'selection',
+                           'envelope_status', 'status_changed_utc', 'template_ids'])
             events = csv.writer(log)
-            for envelope in self.client.envelopes(start, end):
+            for envelope in self.client.envelopes(start, end, ','.join(selected_statuses)):
                 if counts['envelopes'] >= limit:
                     break
                 counts['envelopes'] += 1
@@ -236,11 +260,24 @@ class Runner:
                 did = ''
                 temporary = None
                 try:
+                    envelope_status = envelope.get('status', 'completed').lower()
+                    # Also enforce locally so a surprising API result cannot download a wrong status.
+                    if envelope_status not in selected_statuses:
+                        continue
+                    templates = self.client.templates(eid) if selected_templates else []
+                    used_templates = {str(t.get('templateId', '')).lower() for t in templates}
+                    metadata = [envelope_status, envelope.get('statusChangedDateTime', ''), ';'.join(sorted(used_templates))]
+                    if selected_templates and not used_templates.intersection(selected_templates):
+                        counts['template_excluded'] += 1
+                        rows.writerow([eid, envelope.get('completedDateTime'), envelope.get('emailSubject'), '', '', 'TEMPLATE_EXCLUDED'] + metadata)
+                        inventory.flush()
+                        report(dict(counts))
+                        continue
                     documents = self.client.documents(eid)
                     selected = select_documents(documents, pattern)
                     selected_ids = {d['documentId'] for d in selected}
                     for document in documents:
-                        rows.writerow([eid, envelope.get('completedDateTime'), envelope.get('emailSubject'), document.get('documentId'), document.get('name'), 'SELECTED' if document.get('documentId') in selected_ids else 'EXCLUDED'])
+                        rows.writerow([eid, envelope.get('completedDateTime'), envelope.get('emailSubject'), document.get('documentId'), document.get('name'), 'SELECTED' if document.get('documentId') in selected_ids else 'EXCLUDED'] + metadata)
                     inventory.flush()
                     if not selected:
                         counts['ambiguous'] += 1
@@ -250,10 +287,19 @@ class Runner:
                         counts['selected'] += 1
                         if not download:
                             continue
+                        version = ''
+                        if envelope_status != 'completed':
+                            changed = envelope.get('statusChangedDateTime', '')
+                            if not changed:
+                                raise RuntimeError('Non-completed envelope is missing its status change timestamp')
+                            version = '--' + envelope_status + '--' + safe_name(changed)
+                        record_id = eid + version
                         name = safe_name(envelope.get('emailSubject', 'Contract')) + '--' + safe_name(document.get('name', 'Contract')) + '--' + safe_name(eid) + '--' + did + '.pdf'
+                        if version:
+                            name = name[:-4] + version + '.pdf'
                         target = self.s.downloads / name
                         with self.connect() as db:
-                            previous = db.execute('SELECT filename, sha256 FROM downloads WHERE envelope=? AND document=?', (eid, did)).fetchone()
+                            previous = db.execute('SELECT filename, sha256 FROM downloads WHERE envelope=? AND document=?', (record_id, did)).fetchone()
                         if previous:
                             existing = self.s.downloads / previous[0]
                             if existing.is_file() and digest(existing) == previous[1] and valid_pdf(existing):
@@ -267,7 +313,7 @@ class Runner:
                         checksum = digest(temporary)
                         temporary.replace(target)
                         with self.connect() as db:
-                            db.execute('INSERT OR REPLACE INTO downloads VALUES (?,?,?,?)', (eid, did, name, checksum))
+                            db.execute('INSERT OR REPLACE INTO downloads VALUES (?,?,?,?)', (record_id, did, name, checksum))
                         counts['downloaded'] += 1
                         events.writerow([stamp, eid, did, 'SUCCESS', name])
                 except Exception as error:
