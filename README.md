@@ -60,7 +60,7 @@ Enable repository authentication. Select your GHCR registry. Add these environme
 | AUTO_INTERVAL_SECONDS | 86400 for daily jobs; minimum 300 |
 | DOCUMENT_NAME_PATTERN | Optional case-insensitive filename regular expression |
 
-Portainer's IP 10.102.0.10 is not necessarily the Docker host IP. Use the actual Docker host interface for BIND_ADDRESS. The app uses HTTP and Basic authentication; place it behind your HTTPS reverse proxy for routine use, or access it through an SSH tunnel. The unauthenticated /health endpoint reports only process availability.
+Portainer's address is not necessarily the Docker host IP. Use the actual Docker host interface for BIND_ADDRESS. The app uses HTTP and Basic authentication; place it behind your HTTPS reverse proxy for routine use, or access it through an SSH tunnel. The unauthenticated /health endpoint reports only process availability.
 
 Click Deploy the stack. With automatic jobs disabled, the interface starts even before DocuSign credentials are ready.
 
@@ -108,3 +108,5 @@ https://docs.portainer.io/user/docker/stacks/edit
 Local automated tests cover document/certificate selection, preview inventory, duplicate avoidance across runner recreation, corrupted-file recovery, invalid PDF retry, date ranges, and durable job history. Live DocuSign authentication/downloads, the Linux container, registry access, Portainer deployment, and Git update behavior must still be verified in your environment. /health does not validate DocuSign connectivity.
 
 
+## Completed envelopes and sender selection
+Only completed envelopes are eligible. In the interface, focus Envelope sender, type a name or email, and choose a populated entry. Blank means all accessible senders. Optional template filters apply together with the sender. Automatic jobs use SENDER_USER_ID for a sender GUID and TEMPLATE_IDS for templates; ENVELOPE_STATUSES is obsolete and ignored. See deploy/SELECTION_RULES.md.

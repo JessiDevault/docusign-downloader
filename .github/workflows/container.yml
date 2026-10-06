@@ -30,6 +30,9 @@ jobs:
           docker compose up -d --wait --wait-timeout 120 downloader
           curl --fail http://127.0.0.1:8088/health
           curl --fail --user admin:validation-password-only http://127.0.0.1:8088/ | grep 'Recent jobs'
+          curl --fail --user admin:validation-password-only http://127.0.0.1:8088/ | grep 'sender-options'
+          curl --fail --user admin:validation-password-only http://127.0.0.1:8088/static/users.js | grep 'createElement'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/api/users)" = 401
           docker compose exec -T downloader python -c "from pathlib import Path; p=Path('/config/persistence-test'); p.write_text('survives'); assert p.stat().st_uid == 10001"
           docker compose up -d --force-recreate --wait --wait-timeout 120 downloader
           docker compose exec -T downloader python -c "from pathlib import Path; assert Path('/config/persistence-test').read_text() == 'survives'; assert Path('/data/downloads.sqlite3').exists()"

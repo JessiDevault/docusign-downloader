@@ -68,44 +68,51 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(excluded['counts']['downloaded'], 0)
         self.assertEqual(excluded['counts']['ambiguous'], 0)
 
-    def test_status_mismatch_is_not_downloaded(self):
-        result = Runner(self.settings, FakeClient()).run('2026-01-01', '2026-01-02', statuses='sent', download=True)
-        self.assertEqual(result['counts']['downloaded'], 0)
+    def test_only_completed_can_download(self):
+        runner = Runner(self.settings, FakeClient())
+        with self.assertRaises(ValueError):
+            runner.run('2026-01-01', '2026-01-02', statuses='sent', download=True)
+        for status in ('sent', '', 'signed'):
+            with patch.object(runner.client, 'envelopes', return_value=iter([{'envelopeId': 'x', 'status': status}])):
+                result = runner.run('2026-01-01', '2026-01-02', download=True)
+                self.assertEqual(result['counts']['downloaded'], 0)
 
-    def test_in_progress_snapshot_does_not_suppress_completed_download(self):
+    def test_sender_and_template_must_both_match(self):
         client = FakeClient()
-        sent = {'envelopeId': 'test-envelope', 'emailSubject': 'Building contract', 'status': 'sent', 'statusChangedDateTime': '2026-01-01T12:00:00Z'}
-        with patch.object(client, 'envelopes', return_value=iter([sent])):
-            result = Runner(self.settings, client).run('2026-01-01','2026-01-02', statuses='sent', download=True)
-            self.assertEqual(result['counts']['downloaded'], 1)
-        with patch.object(client, 'envelopes', return_value=iter([sent])):
-            result = Runner(self.settings, client).run('2026-01-01','2026-01-02', statuses='sent', download=True)
-            self.assertEqual(result['counts']['skipped'], 1)
-        result = Runner(self.settings, client).run('2026-01-01','2026-01-02', download=True)
-        self.assertEqual(result['counts']['downloaded'], 1)
-        self.assertEqual(len(list(self.settings.downloads.glob('*.pdf'))), 2)
+        sender = '33333333-3333-3333-3333-333333333333'
+        envelope = {'envelopeId': 'x', 'status': 'completed', 'sender': {'userId': sender}}
+        with patch.object(client, 'envelopes', return_value=iter([envelope])):
+            result = Runner(self.settings, client).run('2026-01-01', '2026-01-02', sender_user_id=sender,
+                template_ids='11111111-1111-1111-1111-111111111111')
+            self.assertEqual(result['counts']['selected'], 1)
+        with patch.object(client, 'envelopes', return_value=iter([envelope])):
+            result = Runner(self.settings, client).run('2026-01-01', '2026-01-02', sender_user_id='44444444-4444-4444-4444-444444444444', download=True)
+            self.assertEqual(result['counts']['sender_excluded'], 1)
+            self.assertEqual(client.calls, 0)
 
     def test_invalid_filters(self):
         for statuses, templates in [('', ''), ('unknown', ''), ('completed', 'not-a-template-id')]:
             with self.assertRaises(ValueError):
                 selection_filters(statuses, templates)
-        self.assertEqual(selection_filters('Completed, sent,completed')[0], ('completed', 'sent'))
+        self.assertEqual(selection_filters('Completed,completed')[0], ('completed',))
 
     def test_api_filters_pagination_and_date_boundaries(self):
         from unittest.mock import MagicMock
         client = Client.__new__(Client)
         first = MagicMock()
         first.__enter__.return_value.json.return_value = {'envelopes': [
-            {'envelopeId':'a','status':'sent','statusChangedDateTime':'2026-01-01T12:00:00Z'},
-            {'envelopeId':'outside','status':'sent','statusChangedDateTime':'2026-01-02T00:00:00Z'}], 'totalSetSize':'3'}
+            {'envelopeId':'a','status':'completed','completedDateTime':'2026-01-01T12:00:00Z'},
+            {'envelopeId':'outside','status':'completed','completedDateTime':'2026-01-02T00:00:00Z'}], 'totalSetSize':'3'}
         second = MagicMock()
         second.__enter__.return_value.json.return_value = {'envelopes': [
-            {'envelopeId':'b','status':'delivered','statusChangedDateTime':'2026-01-01T23:59:59Z'}], 'totalSetSize':'3'}
+            {'envelopeId':'b','status':'completed','completedDateTime':'2026-01-01T23:59:59Z'}], 'totalSetSize':'3'}
         with patch.object(client, 'get', side_effect=[first, second]) as get:
-            result = list(client.envelopes('2026-01-01','2026-01-01','sent,delivered'))
+            result = list(client.envelopes('2026-01-01','2026-01-01',sender_user_id='33333333-3333-3333-3333-333333333333'))
         self.assertEqual([e['envelopeId'] for e in result], ['a','b'])
-        self.assertEqual(get.call_args_list[0].args[1]['status'], 'sent,delivered')
-        self.assertEqual(get.call_args_list[0].args[1]['from_to_status'], 'changed')
+        self.assertEqual(get.call_args_list[0].args[1]['status'], 'completed')
+        self.assertEqual(get.call_args_list[0].args[1]['from_to_status'], 'completed')
+        self.assertEqual(get.call_args_list[0].args[1]['user_filter'], 'sender')
+        self.assertEqual(get.call_args_list[0].args[1]['user_id'], '33333333-3333-3333-3333-333333333333')
         self.assertEqual(get.call_args_list[1].args[1]['start_position'], '2')
 
 if __name__ == '__main__':
@@ -126,3 +133,39 @@ class JobHistoryTests(unittest.TestCase):
             self.assertEqual(states[finished], 'completed')
             self.assertEqual(states[interrupted], 'interrupted')
             self.assertEqual(recreated.get('next_start', ''), '2026-01-01')
+
+class DirectoryTests(unittest.TestCase):
+    def test_duplicate_names_and_unselected_input(self):
+        from downloader.users import UserDirectory
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.users.return_value = [{'id': 'a', 'name': 'Sam', 'email': 'sam@a.com'}, {'id': 'b', 'name': 'Sam', 'email': 'sam@b.com'}]
+        directory = UserDirectory(lambda: client)
+        users = directory.all()
+        self.assertEqual(directory.resolve(users[1]['label']), 'b')
+        self.assertEqual(directory.resolve(''), '')
+        with self.assertRaises(ValueError):
+            directory.resolve('Sam')
+        client.users.assert_called_once()
+        client.session.close.assert_called_once()
+
+    def test_directory_failure_does_not_broaden_selection(self):
+        from downloader.users import UserDirectory
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.users.side_effect = RuntimeError('DocuSign HTTP 403')
+        with self.assertRaises(RuntimeError):
+            UserDirectory(lambda: client).resolve('Sam')
+        client.session.close.assert_called_once()
+
+    def test_account_users_are_paginated(self):
+        from unittest.mock import MagicMock
+        client = Client.__new__(Client)
+        responses = []
+        for user_id in ('a', 'b'):
+            response = MagicMock()
+            response.__enter__.return_value.json.return_value = {'users': [{'userId': user_id, 'userName': 'Sam'}], 'totalSetSize': '2'}
+            responses.append(response)
+        with patch.object(client, 'get', side_effect=responses) as get:
+            self.assertEqual([u['id'] for u in client.users()], ['a', 'b'])
+            self.assertEqual(get.call_args_list[1].args[1]['start_position'], '1')

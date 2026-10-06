@@ -11,7 +11,8 @@ from datetime import date, datetime, timedelta, timezone
 from .jobs import Jobs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
-from .core import Runner, Settings, ENVELOPE_STATUSES, selection_filters
+from .core import Runner, Client, Settings, selection_filters
+from .users import UserDirectory
 
 
 def main():
@@ -19,6 +20,7 @@ def main():
     if len(settings.password) < 16:
         raise SystemExit('APP_PASSWORD must contain at least 16 characters')
     runner = Runner(settings)
+    directory = UserDirectory(lambda: Client(settings))
     lock = threading.Lock()
     state = {'running': False, 'result': 'Ready. Preview one envelope before downloading.'}
     csrf = secrets.token_urlsafe(32)
@@ -27,24 +29,27 @@ def main():
     auto_interval = max(300, int(os.getenv('AUTO_INTERVAL_SECONDS', '86400')))
     auto_start = os.getenv('AUTO_START_DATE', '')
     auto_pattern = os.getenv('DOCUMENT_NAME_PATTERN', '')
-    auto_statuses, auto_templates = selection_filters(os.getenv('ENVELOPE_STATUSES', 'completed'), os.getenv('TEMPLATE_IDS', ''))
+    auto_statuses, auto_templates = selection_filters('completed', os.getenv('TEMPLATE_IDS', ''))
     auto_statuses, auto_templates = ','.join(auto_statuses), ','.join(auto_templates)
+    from uuid import UUID
+    auto_sender = os.getenv('SENDER_USER_ID', '').strip()
+    auto_sender = str(UUID(auto_sender)) if auto_sender else ''
     # Filter changes must not inherit a cursor that skips earlier matching envelopes.
     import hashlib
-    cursor_key = 'next_start_' + hashlib.sha256(json.dumps([auto_start, auto_pattern, auto_statuses, auto_templates]).encode()).hexdigest()[:20]
+    cursor_key = 'next_start_' + hashlib.sha256(json.dumps([auto_start, auto_pattern, auto_statuses, auto_templates, auto_sender]).encode()).hexdigest()[:20]
     if auto_enabled:
         from .core import date_range
         date_range(auto_start, datetime.now(timezone.utc).date().isoformat())
         re.compile(auto_pattern)
 
-    def launch(start, end, pattern, limit, download, source, statuses='completed', template_ids=''):
+    def launch(start, end, pattern, limit, download, source, statuses='completed', template_ids='', sender_user_id=''):
         with lock:
             if state['running']:
                 return False
             state.update(running=True, result='Starting')
         try:
             job_id = jobs.start(source, dict(start=start, end=end, pattern=pattern, limit=limit, download=download,
-                                            statuses=statuses, template_ids=template_ids))
+                                            statuses=statuses, template_ids=template_ids, sender_user_id=sender_user_id))
         except Exception:
             with lock:
                 state['running'] = False
@@ -56,7 +61,7 @@ def main():
                     state['result'] = counts
             status = 'failed'
             try:
-                result = runner.run(start, end, pattern, limit, download, progress, statuses, template_ids)
+                result = runner.run(start, end, pattern, limit, download, progress, statuses, template_ids, sender_user_id)
                 counts = result['counts']
                 status = 'completed' if counts['failed'] == 0 and counts['ambiguous'] == 0 else 'needs_attention'
                 # Retain a one-day overlap, and never advance past an incomplete batch.
@@ -78,7 +83,7 @@ def main():
             next_due = float(jobs.get('next_due', '0'))
             if time.time() >= next_due:
                 start = jobs.get(cursor_key, auto_start)
-                if launch(start, datetime.now(timezone.utc).date().isoformat(), auto_pattern, 100000, True, 'automatic', auto_statuses, auto_templates):
+                if launch(start, datetime.now(timezone.utc).date().isoformat(), auto_pattern, 100000, True, 'automatic', auto_statuses, auto_templates, auto_sender):
                     jobs.set('next_due', str(time.time() + auto_interval))
             time.sleep(10)
 
@@ -93,7 +98,7 @@ def main():
             self.send_header('Content-Length', str(len(payload)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(payload)
 
@@ -113,6 +118,18 @@ def main():
                 return
             if not self.authenticated():
                 return
+            if self.path == '/static/users.js':
+                from pathlib import Path
+                self.send(200, Path(__file__).with_name('users.js').read_text(), 'text/javascript; charset=utf-8')
+                return
+            if self.path == '/api/users':
+                try:
+                    self.send(200, json.dumps(directory.all()), 'application/json')
+                except RuntimeError as error:
+                    self.send(502, json.dumps({'error': str(error)}), 'application/json')
+                except Exception:
+                    self.send(502, json.dumps({'error': 'Unable to load DocuSign account users. Check integration access.'}), 'application/json')
+                return
             if self.path != '/':
                 self.send(404, 'Not found')
                 return
@@ -129,19 +146,21 @@ def main():
                     summary = str(counts)
                 cells = [job['started'], job['status'], job['source'],
                          parameters.get('start', '') + ' to ' + parameters.get('end', ''),
-                         parameters.get('statuses', 'completed'), parameters.get('template_ids', '') or 'All templates',
+                         parameters.get('statuses', 'completed'), parameters.get('sender_user_id', '') or 'All accessible senders', parameters.get('template_ids', '') or 'All templates',
                          'Download' if parameters.get('download') else 'Preview', summary]
                 rows.append('<tr>' + ''.join('<td>' + html.escape(str(cell)) + '</td>' for cell in cells) + '</tr>')
-            history = '<table><thead><tr><th>Started (UTC)</th><th>Job status</th><th>Trigger</th><th>Date range</th><th>Envelope statuses</th><th>Template IDs</th><th>Mode</th><th>Results</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
-            status_controls = ''.join('<label><input type="checkbox" name="statuses" value="' + item + '"' + (' checked' if item in auto_statuses.split(',') else '') + '> ' + item.title() + '</label>' for item in ENVELOPE_STATUSES)
+            history = '<table><thead><tr><th>Started (UTC)</th><th>Job status</th><th>Trigger</th><th>Date range</th><th>Envelope status</th><th>Sender user ID</th><th>Template IDs</th><th>Mode</th><th>Results</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
             schedule_status = 'Enabled' if auto_enabled else 'Disabled'
             self.send(200, '''<!doctype html><html><meta charset="utf-8"><title>DocuSign downloader</title>
 <style>body{font:16px system-ui;max-width:1200px;margin:40px auto;padding:20px}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:10px;border-bottom:1px solid #ddd;vertical-align:top}label{display:block;margin:16px 0}input{padding:8px}button{padding:12px}pre{white-space:pre-wrap;background:#eee;padding:20px}</style>
-<h1>DocuSign contract downloader</h1><p>Start with Preview and an envelope limit of 1. With Completed alone, dates are completion dates in UTC. With other statuses selected, dates are the latest status change in UTC. Certificates are excluded. Without a name filter, only single-document envelopes are selected.</p>
+<h1>DocuSign contract downloader</h1><p>Start with Preview and an envelope limit of 1. Only completed envelopes are selected. Dates are completion dates in UTC. Certificates are excluded. Without a name filter, only single-document envelopes are selected.</p>
 <form method="post" action="/run"><input type="hidden" name="csrf" value="''' + csrf + '''">
-<fieldset><legend>Current envelope statuses</legend>''' + status_controls + '''</fieldset>
+<p>Envelope status: <strong>Completed only</strong></p>
+<label>Envelope sender (optional) <input id="sender" name="sender" list="sender-options" autocomplete="off" maxlength="500" placeholder="Type a name or email"></label>
+<datalist id="sender-options"></datalist><p id="sender-message" role="status">Choose a populated name; blank includes all accessible senders.</p>
+<script src="/static/users.js" defer></script>
 <label>Template IDs (comma-separated; blank includes all envelopes) <input name="template_ids" maxlength="1900" value="''' + html.escape(auto_templates, quote=True) + '''"></label>
-<p>Copy template IDs from DocuSign. An envelope must match a selected status and at least one selected template. Envelopes without templates are excluded when a template filter is set. The limit counts envelopes scanned before template matching. Non-completed downloads are snapshots, not final signed documents.</p>
+<p>Copy template IDs from DocuSign. An envelope must be completed, match the selected sender, and match at least one selected template. Envelopes without templates are excluded when a template filter is set. The limit counts envelopes scanned before template matching.</p>
 <label>First date <input required type="date" name="start"></label>
 <label>Last date <input required type="date" name="end"></label>
 <label>Envelope limit <input required type="number" name="limit" min="1" max="100000" value="1"></label>
@@ -174,16 +193,17 @@ def main():
                 if not 1 <= limit <= 100000 or len(pattern) > 200:
                     raise ValueError('Invalid limit or filter length')
                 re.compile(pattern)
-                statuses, templates = selection_filters(','.join(fields.get('statuses', [])), value('template_ids'))
+                statuses, templates = selection_filters('completed', value('template_ids'))
+                sender = directory.resolve(value('sender'))
                 if value('mode') not in ('preview', 'download'):
                     raise ValueError('Invalid mode')
                 download = value('mode') == 'download'
                 if download and value('confirm') != 'yes':
                     raise ValueError('Check the download confirmation after reviewing the preview')
-            except (ValueError, UnicodeError, re.error) as error:
+            except (ValueError, UnicodeError, re.error, RuntimeError) as error:
                 self.send(400, html.escape(str(error)))
                 return
-            if not launch(start, end, pattern, limit, download, 'manual', ','.join(statuses), ','.join(templates)):
+            if not launch(start, end, pattern, limit, download, 'manual', ','.join(statuses), ','.join(templates), sender):
                 self.send(409, 'A job is already running')
                 return
             self.send_response(303)
